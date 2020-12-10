@@ -42,7 +42,11 @@ func main(){
 		errInfo := ""
 		select {
 			case <-stop:
-				server.Close()
+				err := server.Shutdown(context.Background())
+				if err != nil{
+					fmt.Println("server shutdown failed, err: ", err)
+				}
+				<-errChan
 			case errInfo = <- errChan:
 				close(stop)
 		}
