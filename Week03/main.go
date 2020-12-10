@@ -47,6 +47,7 @@ func main(){
 					fmt.Println("server shutdown failed, err: ", err)
 				}
 				<-errChan
+
 			case errInfo = <- errChan:
 				close(stop)
 		}
