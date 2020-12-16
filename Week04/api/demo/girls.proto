@@ -1,0 +1,18 @@
+syntax = "proto3";
+package demo.v1;
+
+
+//demo 请求
+message GirlsRequest{
+  string name = 1;
+}
+
+//demo 响应
+message GirlsResponse{
+  string message =1;
+}
+
+// demo 接口
+service GirlsDemo{
+  rpc Request (GirlsRequest) returns (GirlsResponse) {}
+}
