@@ -2,12 +2,13 @@ package main
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 )
 
 type Bucket struct {
-	second int
+	second int64
 
 	success int32
 	failed  int32
@@ -15,8 +16,33 @@ type Bucket struct {
 	refuse  int32
 }
 
+func (b *Bucket) clear() {
+	b.second = time.Now().Unix()
+	b.success = 0
+	b.failed = 0
+	b.timeout = 0
+	b.refuse = 0
+}
+
+func (b *Bucket) AddSuccess() int32 {
+	return atomic.AddInt32(&b.success, 1)
+}
+
+func (b *Bucket) AddFailed() int32 {
+	return atomic.AddInt32(&b.failed, 1)
+}
+
+func (b *Bucket) AddTimeout() int32 {
+	return atomic.AddInt32(&b.timeout, 1)
+}
+
+func (b *Bucket) AddRefuse() int32 {
+	return atomic.AddInt32(&b.refuse, 1)
+}
+
 type Counter struct {
-	slots []Bucket
+	slots []*Bucket
+	mu    sync.Mutex
 
 	index int32
 	size  int32
@@ -25,37 +51,31 @@ type Counter struct {
 }
 
 func NewCounter(num int32) *Counter {
-	return &Counter{
-		slots:    make([]Bucket, num),
+	counter := &Counter{
+		slots:    make([]*Bucket, 0, num),
 		index:    0,
 		size:     num,
 		stopChan: make(chan struct{}),
 	}
+
+	for i := 0; i < int(num); i++ {
+		counter.slots = append(counter.slots, &Bucket{})
+	}
+
+	return counter
 }
 
 func (c *Counter) Start() {
-	c.slots[c.index].second = time.Now().Second()
-
+	c.slots[0].clear()
 	ticker := time.NewTicker(time.Second)
 	isRunning := true
 	for {
 		select {
 		case <-ticker.C:
-			for {
-				old := c.index
-				new := (old + 1) % c.size
-				swap := atomic.CompareAndSwapInt32(&c.index, old, new)
-				if swap {
-					//清空当前槽的下一个槽的数据
-					next := (old + 1) % c.size
-					c.slots[next].success = 0
-					c.slots[next].failed = 0
-					c.slots[next].timeout = 0
-					c.slots[next].refuse = 0
-					c.slots[next].second = time.Now().Second() + 1
-					break
-				}
-			}
+			c.mu.Lock()
+			c.index = (c.index + 1) % c.size
+			c.slots[c.index].clear()
+			c.mu.Unlock()
 
 		case <-c.stopChan:
 			isRunning = false
@@ -71,24 +91,21 @@ func (c *Counter) Stop() {
 	c.stopChan <- struct{}{}
 }
 
-func (c *Counter) AddSuccess() int32 {
-	return atomic.AddInt32(&c.slots[c.index].success, 1)
-}
-
-func (c *Counter) AddFailed() int32 {
-	return atomic.AddInt32(&c.slots[c.index].failed, 1)
-}
-
-func (c *Counter) AddTimeout() int32 {
-	return atomic.AddInt32(&c.slots[c.index].timeout, 1)
-}
-
-func (c *Counter) AddRefuse() int32 {
-	return atomic.AddInt32(&c.slots[c.index].refuse, 1)
+func (c *Counter) GetCurrentBucket() *Bucket {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b := c.slots[c.index]
+	return b
 }
 
 func (c *Counter) GetData() []Bucket {
-	return c.slots
+	d := make([]Bucket, 0, c.size)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, value := range c.slots {
+		d = append(d, *value)
+	}
+	return d
 }
 
 func main() {
@@ -98,7 +115,8 @@ func main() {
 	i := 0
 	for {
 		time.Sleep(time.Millisecond)
-		c.AddFailed()
+		b := c.GetCurrentBucket()
+		b.AddFailed()
 
 		if i > 10000 {
 			break
